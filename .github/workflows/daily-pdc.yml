@@ -1,14 +1,15 @@
+
 name: Daily PDC
 
 on:
   # Manual trigger from Actions tab
   workflow_dispatch:
 
-  # Nightly run at 03:00 UTC (adjust to taste)
+  # Nightly run at 03:00 UTC (adjust as needed)
   schedule:
     - cron: '0 3 * * *'
 
-  # Cross-repo trigger from Lab/Service/OS via repository_dispatch
+  # Cross-repo trigger (Lab/Service/OS) via repository_dispatch
   repository_dispatch:
     types: [pdc-compose]
 
@@ -16,7 +17,7 @@ on:
 permissions:
   contents: write
 
-# Configure upstream repos and artifact names here
+# ---------- Configure upstream repos and artifact names ----------
 env:
   LAB_REPO: balaji-kadri/lab-workflow
   LAB_WORKFLOW: build.yml
@@ -30,7 +31,7 @@ env:
   OS_WORKFLOW: build.yml
   OS_ARTIFACT: os-artifact
 
-  PERF_BUDGET: "0.10"   # perf gate budget used by run_perf.py
+  PERF_BUDGET: "0.10"   # perf budget used by run_perf.py
 
 concurrency:
   group: daily-pdc-${{ github.ref }}
@@ -53,8 +54,9 @@ jobs:
       - name: Prepare inputs folder
         run: mkdir -p inputs
 
-      # --- LAB: first try named download; if it fails, download ALL and normalize ---
+      # ---------------- LAB ----------------
       - name: Lab (try named artifact)
+        id: lab_named
         uses: dawidd6/action-download-artifact@v2
         continue-on-error: true
         with:
@@ -65,7 +67,8 @@ jobs:
           path: inputs/lab_named
 
       - name: Lab (fallback: download all)
-        if: ${{ failure() }}
+        if: ${{ steps.lab_named.outcome == 'failure' }}
+        id: lab_all
         uses: dawidd6/action-download-artifact@v2
         with:
           github_token: ${{ secrets.PDC_DISPATCH_TOKEN }}
@@ -77,14 +80,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Prefer named folder, else all
           f="$(find inputs/lab_named -maxdepth 3 -type f -name 'lab.json' | head -n1 || true)"
-          [ -z "$f" ] && f="$(find inputs/lab_all -maxdepth 3 -type f -name 'lab.json' | head -n1 || true)"
-          if [ -z "$f" ]; then echo "❌ lab.json not found in Lab artifacts"; ls -R inputs || true; exit 2; fi
+          if [ -z "$f" ]; then
+            f="$(find inputs/lab_all -maxdepth 3 -type f -name 'lab.json' | head -n1 || true)"
+          fi
+          if [ -z "$f" ]; then
+            echo "❌ lab.json not found in Lab artifacts"; ls -R inputs || true; exit 2
+          fi
           cp "$f" inputs/lab.json
 
-      # --- SERVICE: same tolerant pattern ---
+      # ---------------- SERVICE ----------------
       - name: Service (try named artifact)
+        id: svc_named
         uses: dawidd6/action-download-artifact@v2
         continue-on-error: true
         with:
@@ -95,7 +102,8 @@ jobs:
           path: inputs/service_named
 
       - name: Service (fallback: download all)
-        if: ${{ failure() }}
+        if: ${{ steps.svc_named.outcome == 'failure' }}
+        id: svc_all
         uses: dawidd6/action-download-artifact@v2
         with:
           github_token: ${{ secrets.PDC_DISPATCH_TOKEN }}
@@ -108,12 +116,17 @@ jobs:
         run: |
           set -euo pipefail
           f="$(find inputs/service_named -maxdepth 3 -type f -name 'service.json' | head -n1 || true)"
-          [ -z "$f" ] && f="$(find inputs/service_all -maxdepth 3 -type f -name 'service.json' | head -n1 || true)"
-          if [ -z "$f" ]; then echo "❌ service.json not found in Service artifacts"; ls -R inputs || true; exit 2; fi
+          if [ -z "$f" ]; then
+            f="$(find inputs/service_all -maxdepth 3 -type f -name 'service.json' | head -n1 || true)"
+          fi
+          if [ -z "$f" ]; then
+            echo "❌ service.json not found in Service artifacts"; ls -R inputs || true; exit 2
+          fi
           cp "$f" inputs/service.json
 
-      # --- OS: same tolerant pattern ---
+      # ---------------- OS ----------------
       - name: OS (try named artifact)
+        id: os_named
         uses: dawidd6/action-download-artifact@v2
         continue-on-error: true
         with:
@@ -124,7 +137,8 @@ jobs:
           path: inputs/os_named
 
       - name: OS (fallback: download all)
-        if: ${{ failure() }}
+        if: ${{ steps.os_named.outcome == 'failure' }}
+        id: os_all
         uses: dawidd6/action-download-artifact@v2
         with:
           github_token: ${{ secrets.PDC_DISPATCH_TOKEN }}
@@ -137,14 +151,17 @@ jobs:
         run: |
           set -euo pipefail
           f="$(find inputs/os_named -maxdepth 3 -type f -name 'os.json' | head -n1 || true)"
-          [ -z "$f" ] && f="$(find inputs/os_all -maxdepth 3 -type f -name 'os.json' | head -n1 || true)"
-          if [ -z "$f" ]; then echo "❌ os.json not found in OS artifacts"; ls -R inputs || true; exit 2; fi
+          if [ -z "$f" ]; then
+            f="$(find inputs/os_all -maxdepth 3 -type f -name 'os.json' | head -n1 || true)"
+          fi
+          if [ -z "$f" ]; then
+            echo "❌ os.json not found in OS artifacts"; ls -R inputs || true; exit 2
+          fi
           cp "$f" inputs/os.json
 
       - name: Check final inputs
         run: |
-          echo "Inputs:"
-          ls -la inputs
+          echo "Inputs:"; ls -la inputs
           for f in inputs/lab.json inputs/service.json inputs/os.json; do
             [ -f "$f" ] || { echo "❌ Missing $f"; exit 2; }
           done
@@ -187,9 +204,8 @@ jobs:
           for f in coverage.json e2e.json perf.json security.json; do
             [ -f "reports/$f" ] || { echo "❌ Missing reports/$f"; exit 2; }
           done
-          echo "✅ All reports present."
 
-      - name: Gate on results (reject release on policy violation)
+      - name: Gate on results
         run: |
           python3 scripts/gate.py \
             --coverage reports/coverage.json \
@@ -237,9 +253,8 @@ jobs:
           echo "TAG=$TAG" >> $GITHUB_ENV
           git tag -a "$TAG" -m "Daily PDC release"
           git push origin "$TAG"
-          echo "✅ Pushed tag: $TAG"
 
-      - name: Emit dashboard payload (hardened script tolerates missing reports)
+      - name: Emit dashboard payload
         run: |
           python3 scripts/emit_dashboard.py \
             --tag "$TAG" \
@@ -253,13 +268,11 @@ jobs:
           name: pdc-dashboard-payload
           path: dashboard/payload.json
 
-      # --- GitHub Pages publishing (gh-pages branch) ---
+      # -------- Publish to GitHub Pages (gh-pages) --------
       - name: Prepare dashboard workspace
         run: |
           rm -rf dashboard-work && mkdir -p dashboard-work
-          # Copy your site assets (commit these in dashboard-site-src/)
           cp -r dashboard-site-src/* dashboard-work/
-          # Copy latest payload
           cp dashboard/payload.json dashboard-work/payload.json
 
       - name: Bring in existing history (if any)
@@ -268,7 +281,7 @@ jobs:
           ref: gh-pages
           path: _ghpages
 
-      - name: Merge history.json (append latest payload, cap to 200 entries)
+      - name: Merge history.json
         run: |
           python - << 'PY'
           import json, pathlib, time
@@ -279,11 +292,14 @@ jobs:
           payload['timestamp'] = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
 
           hist = []
-          if (ghp/'history.json').exists():
+          src = ghp/'history.json'
+          if src.exists():
             try:
-              hist = json.loads((ghp/'history.json').read_text(encoding='utf-8'))
-              if not isinstance(hist, list): hist = []
-            except Exception: hist = []
+              hist = json.loads(src.read_text(encoding='utf-8'))
+              if not isinstance(hist, list):
+                hist = []
+            except Exception:
+              hist = []
 
           tag = payload.get('build', {}).get('tag')
           hist = [e for e in hist if e.get('build', {}).get('tag') != tag]
@@ -293,7 +309,7 @@ jobs:
           (site/'history.json').write_text(json.dumps(hist, indent=2), encoding='utf-8')
           PY
 
-      - name: Deploy dashboard to GitHub Pages (gh-pages branch)
+      - name: Deploy dashboard to GitHub Pages
         uses: peaceiris/actions-gh-pages@v3
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -301,4 +317,3 @@ jobs:
           publish_branch: gh-pages
           keep_files: true
           commit_message: "Dashboard update: ${{ env.TAG }}"
-``
