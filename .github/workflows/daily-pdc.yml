@@ -43,7 +43,7 @@ jobs:
       - name: Prepare inputs
         run: mkdir -p inputs
 
-      # --------- LAB: download ALL artifacts from latest successful run and pick lab.json ----------
+      # LAB artifacts
       - name: Lab - download ALL artifacts
         uses: dawidd6/action-download-artifact@v2
         with:
@@ -53,14 +53,13 @@ jobs:
           path: inputs/lab_all
 
       - name: Lab - normalize
-        shell: bash
         run: |
           set -euo pipefail
           f="$(find inputs/lab_all -type f -name 'lab.json' | head -n1 || true)"
-          if [ -z "$f" ]; then echo "❌ lab.json not found in Lab artifacts"; ls -R inputs/lab_all || true; exit 2; fi
+          if [ -z "$f" ]; then echo "❌ lab.json not found"; exit 2; fi
           cp "$f" inputs/lab.json
 
-      # --------- SERVICE ----------
+      # SERVICE artifacts
       - name: Service - download ALL artifacts
         uses: dawidd6/action-download-artifact@v2
         with:
@@ -70,14 +69,13 @@ jobs:
           path: inputs/service_all
 
       - name: Service - normalize
-        shell: bash
         run: |
           set -euo pipefail
           f="$(find inputs/service_all -type f -name 'service.json' | head -n1 || true)"
-          if [ -z "$f" ]; then echo "❌ service.json not found in Service artifacts"; ls -R inputs/service_all || true; exit 2; fi
+          if [ -z "$f" ]; then echo "❌ service.json not found"; exit 2; fi
           cp "$f" inputs/service.json
 
-      # --------- OS ----------
+      # OS artifacts
       - name: OS - download ALL artifacts
         uses: dawidd6/action-download-artifact@v2
         with:
@@ -87,11 +85,10 @@ jobs:
           path: inputs/os_all
 
       - name: OS - normalize
-        shell: bash
         run: |
           set -euo pipefail
           f="$(find inputs/os_all -type f -name 'os.json' | head -n1 || true)"
-          if [ -z "$f" ]; then echo "❌ os.json not found in OS artifacts"; ls -R inputs/os_all || true; exit 2; fi
+          if [ -z "$f" ]; then echo "❌ os.json not found"; exit 2; fi
           cp "$f" inputs/os.json
 
       - name: Verify inputs
@@ -208,6 +205,14 @@ jobs:
           cp -r dashboard-site-src/* dashboard-work/ || true
           cp dashboard/payload.json dashboard-work/payload.json
 
+      # ✅ Ensure index.html exists to avoid 404
+      - name: Ensure index.html exists
+        run: |
+          if [ ! -f "dashboard-work/index.html" ]; then
+            echo "⚠️ index.html missing, creating a placeholder"
+            echo "<!DOCTYPE html><html><head><title>PDC Dashboard</title></head><body><h1>PDC Dashboard</h1><p>Payload: $(date)</p></body></html>" > dashboard-work/index.html
+          fi
+
       - name: Bring in existing history (if any)
         uses: actions/checkout@v4
         with:
@@ -216,7 +221,7 @@ jobs:
 
       - name: Merge history.json
         run: |
-          python - << 'PY'
+          python3 - << 'PY'
           import json, pathlib, time
           site = pathlib.Path('dashboard-work')
           ghp  = pathlib.Path('_ghpages')
@@ -230,7 +235,8 @@ jobs:
             try:
               hist = json.loads(src.read_text(encoding='utf-8'))
               if not isinstance(hist, list): hist = []
-            except Exception: hist = []
+            except Exception:
+              hist = []
 
           tag = payload.get('build', {}).get('tag')
           hist = [e for e in hist if e.get('build', {}).get('tag') != tag]
