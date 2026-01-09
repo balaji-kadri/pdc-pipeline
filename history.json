@@ -1,6 +1,20 @@
 [
   {
     "build": {
+      "tag": "pdc-2026.01.09-build12",
+      "commit": "58746959da0a5397409c3f99e7cbda9dd029c4bc",
+      "status": "passed"
+    },
+    "metrics": {
+      "coverage": 0.86,
+      "e2e_pass_rate": 1.0,
+      "perf_regression_pct": 0.05,
+      "security_high_issues": 0
+    },
+    "timestamp": "2026-01-09T08:58:39Z"
+  },
+  {
+    "build": {
       "tag": "pdc-2026.01.09-build11",
       "commit": "38694ffa01f5d790c49351018f1702a9e91f33df",
       "status": "passed"

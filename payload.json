@@ -1,7 +1,7 @@
 {
   "build": {
-    "tag": "pdc-2026.01.09-build11",
-    "commit": "38694ffa01f5d790c49351018f1702a9e91f33df",
+    "tag": "pdc-2026.01.09-build12",
+    "commit": "58746959da0a5397409c3f99e7cbda9dd029c4bc",
     "status": "passed"
   },
   "metrics": {
