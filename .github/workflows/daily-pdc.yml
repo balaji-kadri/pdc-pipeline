@@ -1,26 +1,37 @@
 name: Daily PDC
 
 on:
+  # Manually run from Actions tab
   workflow_dispatch:
+
+  # Nightly (03:00 UTC). Adjust as needed.
   schedule:
     - cron: '0 3 * * *'
+
+  # Triggered by Lab/Service/OS repos via repository_dispatch
   repository_dispatch:
     types: [pdc-compose]
 
+# Needed if you push tags/releases from the workflow
 permissions:
   contents: write
 
+# Customize these to your org/repo names and workflow/artifact names in the upstream repos
 env:
   LAB_REPO: balaji-kadri/lab-workflow
   LAB_WORKFLOW: build.yml
+  LAB_ARTIFACT: lab-artifact
 
   SERVICE_REPO: balaji-kadri/service-workflow
   SERVICE_WORKFLOW: build.yml
+  SERVICE_ARTIFACT: service-artifact
 
   OS_REPO: balaji-kadri/os-workflow
   OS_WORKFLOW: build.yml
+  OS_ARTIFACT: os-artifact
 
-  PERF_BUDGET: "0.10"   # perf gate threshold
+  # Optional perf budget used by run_perf.py
+  PERF_BUDGET: "0.10"
 
 concurrency:
   group: daily-pdc-${{ github.ref }}
@@ -33,68 +44,60 @@ jobs:
       - name: Checkout PDC repo
         uses: actions/checkout@v4
         with:
+          # Ensure tags/history available for release tagging
           fetch-depth: 0
 
-      - name: Setup Python
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Prepare inputs
+      - name: Prepare inputs folder
         run: mkdir -p inputs
 
-      # LAB artifacts
-      - name: Lab - download ALL artifacts
+      # Download artifacts from Lab/Service/OS repositories (requires PAT with contents:read on those repos)
+      - name: Download Lab artifact
         uses: dawidd6/action-download-artifact@v2
         with:
           github_token: ${{ secrets.PDC_DISPATCH_TOKEN }}
           repo: ${{ env.LAB_REPO }}
           workflow: ${{ env.LAB_WORKFLOW }}
-          path: inputs/lab_all
+          name: ${{ env.LAB_ARTIFACT }}
+          path: inputs
 
-      - name: Lab - normalize
-        run: |
-          set -euo pipefail
-          f="$(find inputs/lab_all -type f -name 'lab.json' | head -n1 || true)"
-          if [ -z "$f" ]; then echo "❌ lab.json not found"; exit 2; fi
-          cp "$f" inputs/lab.json
-
-      # SERVICE artifacts
-      - name: Service - download ALL artifacts
+      - name: Download Service artifact
         uses: dawidd6/action-download-artifact@v2
         with:
           github_token: ${{ secrets.PDC_DISPATCH_TOKEN }}
           repo: ${{ env.SERVICE_REPO }}
           workflow: ${{ env.SERVICE_WORKFLOW }}
-          path: inputs/service_all
+          name: ${{ env.SERVICE_ARTIFACT }}
+          path: inputs
 
-      - name: Service - normalize
-        run: |
-          set -euo pipefail
-          f="$(find inputs/service_all -type f -name 'service.json' | head -n1 || true)"
-          if [ -z "$f" ]; then echo "❌ service.json not found"; exit 2; fi
-          cp "$f" inputs/service.json
-
-      # OS artifacts
-      - name: OS - download ALL artifacts
+      - name: Download OS artifact
         uses: dawidd6/action-download-artifact@v2
         with:
           github_token: ${{ secrets.PDC_DISPATCH_TOKEN }}
           repo: ${{ env.OS_REPO }}
           workflow: ${{ env.OS_WORKFLOW }}
-          path: inputs/os_all
+          name: ${{ env.OS_ARTIFACT }}
+          path: inputs
 
-      - name: OS - normalize
+      - name: Normalize filenames (if artifacts landed in subfolders)
+        shell: bash
         run: |
           set -euo pipefail
-          f="$(find inputs/os_all -type f -name 'os.json' | head -n1 || true)"
-          if [ -z "$f" ]; then echo "❌ os.json not found"; exit 2; fi
-          cp "$f" inputs/os.json
+          # Move lab.json/service.json/os.json to inputs root if nested
+          if [ -f "inputs/${LAB_ARTIFACT}/lab.json" ]; then mv "inputs/${LAB_ARTIFACT}/lab.json" inputs/lab.json; fi
+          if [ -f "inputs/${SERVICE_ARTIFACT}/service.json" ]; then mv "inputs/${SERVICE_ARTIFACT}/service.json" inputs/service.json; fi
+          if [ -f "inputs/${OS_ARTIFACT}/os.json" ]; then mv "inputs/${OS_ARTIFACT}/os.json" inputs/os.json; fi
+          echo "Inputs directory:"
+          ls -la inputs
 
-      - name: Verify inputs
-        run: |
-          echo "Inputs:"; ls -la inputs
-          test -f inputs/lab.json && test -f inputs/service.json && test -f inputs/os.json
+          # Fail fast if any required input missing
+          for f in inputs/lab.json inputs/service.json inputs/os.json; do
+            [ -f "$f" ] || { echo "❌ Missing $f. Verify upstream artifacts and names."; exit 2; }
+          done
 
       - name: Compose PDC
         run: |
@@ -103,7 +106,7 @@ jobs:
             --service inputs/service.json \
             --os inputs/os.json
 
-      - name: Upload composed artifact
+      - name: Upload composed artifact (for debugging/audit)
         uses: actions/upload-artifact@v4
         with:
           name: pdc-composed
@@ -116,7 +119,7 @@ jobs:
       - name: Checkout PDC repo
         uses: actions/checkout@v4
 
-      - name: Setup Python
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -128,14 +131,15 @@ jobs:
           python3 scripts/run_security.py --report reports/security.json
           python3 scripts/run_coverage.py --report reports/coverage.json
 
-      - name: Verify reports
+      - name: Verify reports exist
         run: |
-          ls -la reports || { echo "reports missing"; exit 1; }
+          ls -la reports || { echo "reports/ missing"; exit 1; }
           for f in coverage.json e2e.json perf.json security.json; do
             [ -f "reports/$f" ] || { echo "❌ Missing reports/$f"; exit 2; }
           done
+          echo "✅ All reports present."
 
-      - name: Gate on results
+      - name: Gate on results (reject if policy violated)
         run: |
           python3 scripts/gate.py \
             --coverage reports/coverage.json \
@@ -161,11 +165,12 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup Python
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
+      # Bring reports from previous job into this job's workspace
       - name: Download test reports
         uses: actions/download-artifact@v4
         with:
@@ -183,7 +188,9 @@ jobs:
           echo "TAG=$TAG" >> $GITHUB_ENV
           git tag -a "$TAG" -m "Daily PDC release"
           git push origin "$TAG"
+          echo "✅ Pushed tag: $TAG"
 
+      # Harden emit step: will succeed even if a report is missing (your script can log defaults)
       - name: Emit dashboard payload
         run: |
           python3 scripts/emit_dashboard.py \
@@ -197,60 +204,18 @@ jobs:
         with:
           name: pdc-dashboard-payload
           path: dashboard/payload.json
-
-      # ---------- GitHub Pages publish ----------
-      - name: Prepare dashboard workspace
+      
+      - name: Prepare dashboard site
         run: |
-          rm -rf dashboard-work && mkdir -p dashboard-work
-          cp -r dashboard-site-src/* dashboard-work/ || true
-          cp dashboard/payload.json dashboard-work/payload.json
+          # Copy the generated payload.json to the dashboard-site directory
+          cp dashboard/payload.json dashboard-site/payload.json
+        # The static files (index.html, style.css, script.js) are already in dashboard-site/
+          ls -la dashboard-site/
 
-      # ✅ Ensure index.html exists to avoid 404
-      - name: Ensure index.html exists
-        run: |
-          if [ ! -f "dashboard-work/index.html" ]; then
-            echo "⚠️ index.html missing, creating a placeholder"
-            echo "<!DOCTYPE html><html><head><title>PDC Dashboard</title></head><body><h1>PDC Dashboard</h1><p>Payload: $(date)</p></body></html>" > dashboard-work/index.html
-          fi
-
-      - name: Bring in existing history (if any)
-        uses: actions/checkout@v4
-        with:
-          ref: gh-pages
-          path: _ghpages
-
-      - name: Merge history.json
-        run: |
-          python3 - << 'PY'
-          import json, pathlib, time
-          site = pathlib.Path('dashboard-work')
-          ghp  = pathlib.Path('_ghpages')
-
-          payload = json.loads((site/'payload.json').read_text(encoding='utf-8'))
-          payload['timestamp'] = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
-
-          hist = []
-          src = ghp/'history.json'
-          if src.exists():
-            try:
-              hist = json.loads(src.read_text(encoding='utf-8'))
-              if not isinstance(hist, list): hist = []
-            except Exception:
-              hist = []
-
-          tag = payload.get('build', {}).get('tag')
-          hist = [e for e in hist if e.get('build', {}).get('tag') != tag]
-          hist.append(payload)
-          hist = sorted(hist, key=lambda e: e.get('timestamp',''), reverse=True)[:200]
-
-          (site/'history.json').write_text(json.dumps(hist, indent=2), encoding='utf-8')
-          PY
-
-      - name: Deploy dashboard to GitHub Pages
+      - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v3
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: dashboard-work
+          publish_dir: dashboard-site
           publish_branch: gh-pages
-          keep_files: true
-          commit_message: "Dashboard update: ${{ env.TAG }}"
+
