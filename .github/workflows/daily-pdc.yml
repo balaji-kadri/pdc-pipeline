@@ -209,7 +209,7 @@ jobs:
         run: |
           # Copy the generated payload.json to the dashboard-site directory
           cp dashboard/payload.json dashboard-site/payload.json
-        # The static files (index.html, style.css, script.js) are already in dashboard-site/
+          # The static files (index.html, style.css, script.js) are already in dashboard-site/
           ls -la dashboard-site/
 
       - name: Deploy to GitHub Pages
