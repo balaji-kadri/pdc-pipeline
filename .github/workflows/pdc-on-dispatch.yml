@@ -1,0 +1,40 @@
+
+name: PDC on Dispatch
+on:
+  repository_dispatch:
+    types: [pdc-compose]
+
+permissions:
+  contents: write
+
+jobs:
+  pdc:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+      - run: |
+          mkdir -p inputs
+          # Later: download artifacts from lab/service/os
+          python3 scripts/compose_pdc.py --lab inputs/lab.json --service inputs/service.json --os inputs/os.json
+      - run: |
+          python3 scripts/run_e2e.py --report reports/e2e.json
+          python3 scripts/run_perf.py --budget 0.10 --report reports/perf.json
+          python3 scripts/run_security.py --report reports/security.json
+          python3 scripts/run_coverage.py --report reports/coverage.json
+      - run: |
+          python3 scripts/gate.py \
+            --coverage reports/coverage.json \
+            --e2e reports/e2e.json \
+            --perf reports/perf.json \
+            --security reports/security.json \
+            --policy policies/pdc_policy.json
+      - if: ${{ success() }}
+        run: |
+          TAG="pdc-$(date +'%Y.%m.%d')-build${{ github.run_number }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "PDC dispatch release"
+          git push origin "$TAG"
+          python3 scripts/emit_dashboard.py --tag "$TAG" --commit "${{ github.sha }}" --reports reports --out dashboard/payload.json
