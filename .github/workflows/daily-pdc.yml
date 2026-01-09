@@ -1,37 +1,26 @@
-
 name: Daily PDC
 
 on:
-  # Manual trigger from Actions tab
   workflow_dispatch:
-
-  # Nightly run at 03:00 UTC (adjust as needed)
   schedule:
     - cron: '0 3 * * *'
-
-  # Cross-repo trigger (Lab/Service/OS) via repository_dispatch
   repository_dispatch:
     types: [pdc-compose]
 
-# Needed for tag push and Pages publishing
 permissions:
   contents: write
 
-# ---------- Configure upstream repos and artifact names ----------
 env:
   LAB_REPO: balaji-kadri/lab-workflow
   LAB_WORKFLOW: build.yml
-  LAB_ARTIFACT: lab-artifact
 
   SERVICE_REPO: balaji-kadri/service-workflow
   SERVICE_WORKFLOW: build.yml
-  SERVICE_ARTIFACT: service-artifact
 
   OS_REPO: balaji-kadri/os-workflow
   OS_WORKFLOW: build.yml
-  OS_ARTIFACT: os-artifact
 
-  PERF_BUDGET: "0.10"   # perf budget used by run_perf.py
+  PERF_BUDGET: "0.10"   # perf gate threshold
 
 concurrency:
   group: daily-pdc-${{ github.ref }}
@@ -46,29 +35,16 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up Python
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Prepare inputs folder
+      - name: Prepare inputs
         run: mkdir -p inputs
 
-      # ---------------- LAB ----------------
-      - name: Lab (try named artifact)
-        id: lab_named
-        uses: dawidd6/action-download-artifact@v2
-        continue-on-error: true
-        with:
-          github_token: ${{ secrets.PDC_DISPATCH_TOKEN }}
-          repo: ${{ env.LAB_REPO }}
-          workflow: ${{ env.LAB_WORKFLOW }}
-          name: ${{ env.LAB_ARTIFACT }}
-          path: inputs/lab_named
-
-      - name: Lab (fallback: download all)
-        if: ${{ steps.lab_named.outcome == 'failure' }}
-        id: lab_all
+      # --------- LAB: download ALL artifacts from latest successful run and pick lab.json ----------
+      - name: Lab - download ALL artifacts
         uses: dawidd6/action-download-artifact@v2
         with:
           github_token: ${{ secrets.PDC_DISPATCH_TOKEN }}
@@ -76,34 +52,16 @@ jobs:
           workflow: ${{ env.LAB_WORKFLOW }}
           path: inputs/lab_all
 
-      - name: Normalize Lab
+      - name: Lab - normalize
         shell: bash
         run: |
           set -euo pipefail
-          f="$(find inputs/lab_named -maxdepth 3 -type f -name 'lab.json' | head -n1 || true)"
-          if [ -z "$f" ]; then
-            f="$(find inputs/lab_all -maxdepth 3 -type f -name 'lab.json' | head -n1 || true)"
-          fi
-          if [ -z "$f" ]; then
-            echo "❌ lab.json not found in Lab artifacts"; ls -R inputs || true; exit 2
-          fi
+          f="$(find inputs/lab_all -type f -name 'lab.json' | head -n1 || true)"
+          if [ -z "$f" ]; then echo "❌ lab.json not found in Lab artifacts"; ls -R inputs/lab_all || true; exit 2; fi
           cp "$f" inputs/lab.json
 
-      # ---------------- SERVICE ----------------
-      - name: Service (try named artifact)
-        id: svc_named
-        uses: dawidd6/action-download-artifact@v2
-        continue-on-error: true
-        with:
-          github_token: ${{ secrets.PDC_DISPATCH_TOKEN }}
-          repo: ${{ env.SERVICE_REPO }}
-          workflow: ${{ env.SERVICE_WORKFLOW }}
-          name: ${{ env.SERVICE_ARTIFACT }}
-          path: inputs/service_named
-
-      - name: Service (fallback: download all)
-        if: ${{ steps.svc_named.outcome == 'failure' }}
-        id: svc_all
+      # --------- SERVICE ----------
+      - name: Service - download ALL artifacts
         uses: dawidd6/action-download-artifact@v2
         with:
           github_token: ${{ secrets.PDC_DISPATCH_TOKEN }}
@@ -111,34 +69,16 @@ jobs:
           workflow: ${{ env.SERVICE_WORKFLOW }}
           path: inputs/service_all
 
-      - name: Normalize Service
+      - name: Service - normalize
         shell: bash
         run: |
           set -euo pipefail
-          f="$(find inputs/service_named -maxdepth 3 -type f -name 'service.json' | head -n1 || true)"
-          if [ -z "$f" ]; then
-            f="$(find inputs/service_all -maxdepth 3 -type f -name 'service.json' | head -n1 || true)"
-          fi
-          if [ -z "$f" ]; then
-            echo "❌ service.json not found in Service artifacts"; ls -R inputs || true; exit 2
-          fi
+          f="$(find inputs/service_all -type f -name 'service.json' | head -n1 || true)"
+          if [ -z "$f" ]; then echo "❌ service.json not found in Service artifacts"; ls -R inputs/service_all || true; exit 2; fi
           cp "$f" inputs/service.json
 
-      # ---------------- OS ----------------
-      - name: OS (try named artifact)
-        id: os_named
-        uses: dawidd6/action-download-artifact@v2
-        continue-on-error: true
-        with:
-          github_token: ${{ secrets.PDC_DISPATCH_TOKEN }}
-          repo: ${{ env.OS_REPO }}
-          workflow: ${{ env.OS_WORKFLOW }}
-          name: ${{ env.OS_ARTIFACT }}
-          path: inputs/os_named
-
-      - name: OS (fallback: download all)
-        if: ${{ steps.os_named.outcome == 'failure' }}
-        id: os_all
+      # --------- OS ----------
+      - name: OS - download ALL artifacts
         uses: dawidd6/action-download-artifact@v2
         with:
           github_token: ${{ secrets.PDC_DISPATCH_TOKEN }}
@@ -146,25 +86,18 @@ jobs:
           workflow: ${{ env.OS_WORKFLOW }}
           path: inputs/os_all
 
-      - name: Normalize OS
+      - name: OS - normalize
         shell: bash
         run: |
           set -euo pipefail
-          f="$(find inputs/os_named -maxdepth 3 -type f -name 'os.json' | head -n1 || true)"
-          if [ -z "$f" ]; then
-            f="$(find inputs/os_all -maxdepth 3 -type f -name 'os.json' | head -n1 || true)"
-          fi
-          if [ -z "$f" ]; then
-            echo "❌ os.json not found in OS artifacts"; ls -R inputs || true; exit 2
-          fi
+          f="$(find inputs/os_all -type f -name 'os.json' | head -n1 || true)"
+          if [ -z "$f" ]; then echo "❌ os.json not found in OS artifacts"; ls -R inputs/os_all || true; exit 2; fi
           cp "$f" inputs/os.json
 
-      - name: Check final inputs
+      - name: Verify inputs
         run: |
           echo "Inputs:"; ls -la inputs
-          for f in inputs/lab.json inputs/service.json inputs/os.json; do
-            [ -f "$f" ] || { echo "❌ Missing $f"; exit 2; }
-          done
+          test -f inputs/lab.json && test -f inputs/service.json && test -f inputs/os.json
 
       - name: Compose PDC
         run: |
@@ -186,7 +119,7 @@ jobs:
       - name: Checkout PDC repo
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -198,9 +131,9 @@ jobs:
           python3 scripts/run_security.py --report reports/security.json
           python3 scripts/run_coverage.py --report reports/coverage.json
 
-      - name: Verify reports exist
+      - name: Verify reports
         run: |
-          ls -la reports || { echo "reports/ missing"; exit 1; }
+          ls -la reports || { echo "reports missing"; exit 1; }
           for f in coverage.json e2e.json perf.json security.json; do
             [ -f "reports/$f" ] || { echo "❌ Missing reports/$f"; exit 2; }
           done
@@ -231,7 +164,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up Python
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -242,7 +175,7 @@ jobs:
           name: pdc-test-reports
           path: reports
 
-      - name: Configure Git (for tagging)
+      - name: Configure Git (tagging)
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -268,11 +201,11 @@ jobs:
           name: pdc-dashboard-payload
           path: dashboard/payload.json
 
-      # -------- Publish to GitHub Pages (gh-pages) --------
+      # ---------- GitHub Pages publish ----------
       - name: Prepare dashboard workspace
         run: |
           rm -rf dashboard-work && mkdir -p dashboard-work
-          cp -r dashboard-site-src/* dashboard-work/
+          cp -r dashboard-site-src/* dashboard-work/ || true
           cp dashboard/payload.json dashboard-work/payload.json
 
       - name: Bring in existing history (if any)
@@ -296,10 +229,8 @@ jobs:
           if src.exists():
             try:
               hist = json.loads(src.read_text(encoding='utf-8'))
-              if not isinstance(hist, list):
-                hist = []
-            except Exception:
-              hist = []
+              if not isinstance(hist, list): hist = []
+            except Exception: hist = []
 
           tag = payload.get('build', {}).get('tag')
           hist = [e for e in hist if e.get('build', {}).get('tag') != tag]
