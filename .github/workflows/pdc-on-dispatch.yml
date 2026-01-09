@@ -1,11 +1,11 @@
 
-name: PDC on Dispatch
+name: PDC on dispatch
 on:
   repository_dispatch:
     types: [pdc-compose]
 
 permissions:
-  contents: write
+  contents: write   # needed if you push tags
 
 jobs:
   pdc:
@@ -14,27 +14,82 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: '3.11' }
-      - run: |
-          mkdir -p inputs
-          # Later: download artifacts from lab/service/os
-          python3 scripts/compose_pdc.py --lab inputs/lab.json --service inputs/service.json --os inputs/os.json
-      - run: |
+
+      - name: Prepare inputs folder
+        run: mkdir -p inputs
+
+      # Download Lab artifact from the lab repo's workflow (build.yml)
+      - name: Download Lab artifact
+        uses: dawidd6/action-download-artifact@v2
+        with:
+          github_token: ${{ secrets.PDC_DISPATCH_TOKEN }}     # PAT with access to lab repo
+          repo: <your-username>/lab-workflow
+          workflow: build.yml                                  # file name of upstream workflow
+          name: lab-artifact                                   # artifact name uploaded upstream
+          path: inputs                                         # will download inputs/lab.json
+
+      # Download Service artifact
+      - name: Download Service artifact
+        uses: dawidd6/action-download-artifact@v2
+        with:
+          github_token: ${{ secrets.PDC_DISPATCH_TOKEN }}
+          repo: <your-username>/service-workflow
+          workflow: build.yml
+          name: service-artifact
+          path: inputs
+
+      # Download OS artifact
+      - name: Download OS artifact
+        uses: dawidd6/action-download-artifact@v2
+        with:
+          github_token: ${{ secrets.PDC_DISPATCH_TOKEN }}
+          repo: <your-username>/os-workflow
+          workflow: build.yml
+          name: os-artifact
+          path: inputs
+
+      # (Optional) Rename files if the action created subfolders
+      - name: Normalize filenames
+        run: |
+          # If artifacts downloaded into subdirectories, move them to inputs root:
+          if [ -f inputs/lab-artifact/lab.json ]; then mv inputs/lab-artifact/lab.json inputs/lab.json; fi
+          if [ -f inputs/service-artifact/service.json ]; then mv inputs/service-artifact/service.json inputs/service.json; fi
+          if [ -f inputs/os-artifact/os.json ]; then mv inputs/os-artifact/os.json inputs/os.json; fi
+          ls -la inputs
+
+      # Compose
+      - name: Compose PDC
+        run: |
+          python3 scripts/compose_pdc.py \
+            --lab inputs/lab.json \
+            --service inputs/service.json \
+            --os inputs/os.json
+
+      # Tests & Gate
+      - name: Run tests & gate
+        run: |
           python3 scripts/run_e2e.py --report reports/e2e.json
           python3 scripts/run_perf.py --budget 0.10 --report reports/perf.json
           python3 scripts/run_security.py --report reports/security.json
           python3 scripts/run_coverage.py --report reports/coverage.json
-      - run: |
           python3 scripts/gate.py \
             --coverage reports/coverage.json \
             --e2e reports/e2e.json \
             --perf reports/perf.json \
             --security reports/security.json \
             --policy policies/pdc_policy.json
-      - if: ${{ success() }}
+
+      # Release (only if gate passed)
+      - name: Tag & emit dashboard payload
+        if: ${{ success() }}
         run: |
           TAG="pdc-$(date +'%Y.%m.%d')-build${{ github.run_number }}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git tag -a "$TAG" -m "PDC dispatch release"
           git push origin "$TAG"
-          python3 scripts/emit_dashboard.py --tag "$TAG" --commit "${{ github.sha }}" --reports reports --out dashboard/payload.json
+          python3 scripts/emit_dashboard.py \
+            --tag "$TAG" \
+            --commit "${{ github.sha }}" \
+            --reports reports \
+            --out dashboard/payload.json
