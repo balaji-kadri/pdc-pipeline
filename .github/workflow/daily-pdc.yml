@@ -1,0 +1,82 @@
+
+name: Daily PDC
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 3 * * *'
+
+jobs:
+  compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # In real orgs you would fetch artifacts from the other repos via APIs or registries.
+      # For learning: reuse artifacts produced by this repo OR mock them.
+      # Here we create mock inputs to keep it self-contained:
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+      - run: |
+          mkdir -p inputs
+          echo '{"component":"lab","version":1,"data":{"lab_metric":42}}' > inputs/lab.json
+          echo '{"component":"service","version":1,"data":{"service_ready":true}}' > inputs/service.json
+          echo '{"component":"os","version":1,"data":{"kernel":"mini-1.0"}}' > inputs/os.json
+
+      - name: Compose PDC
+        run: |
+          python3 scripts/compose_pdc.py --lab inputs/lab.json --service inputs/service.json --os inputs/os.json
+      - name: Upload composed
+        uses: actions/upload-artifact@v4
+        with:
+          name: pdc-composed
+          path: dist/pdc.json
+
+  test_and_gate:
+    runs-on: ubuntu-latest
+    needs: compose
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+      - run: |
+          python3 scripts/run_e2e.py --report reports/e2e.json
+          python3 scripts/run_perf.py --budget 0.10 --report reports/perf.json
+          python3 scripts/run_security.py --report reports/security.json
+          python3 scripts/run_coverage.py --report reports/coverage.json
+      - name: Publish test artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pdc-test-reports
+          path: reports
+      - name: Gate
+        run: |
+          python3 scripts/gate.py \
+            --coverage reports/coverage.json \
+            --e2e reports/e2e.json \
+            --perf reports/perf.json \
+            --security reports/security.json \
+            --policy policies/pdc_policy.json
+
+  release:
+    runs-on: ubuntu-latest
+    needs: test_and_gate
+    if: ${{ needs.test_and_gate.result == 'success' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+      - name: Tag
+        run: |
+          TAG="pdc-$(date +'%Y.%m.%d')-build${{ github.run_number }}"
+          echo "TAG=$TAG" >> $GITHUB_ENV
+          git config user.name "ci-bot"
+          git config user.email "ci-bot@example.com"
+          git tag -a "$TAG" -m "Daily PDC release"
+          git push origin "$TAG"
+      - name: Emit dashboard payload
+        run: |
+          python3 scripts/emit_dashboard.py --tag "$TAG" --commit "${{ github.sha }}" --reports reports --out dashboard/payload.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pdc-dashboard-payload
+          path: dashboard/payload.json
