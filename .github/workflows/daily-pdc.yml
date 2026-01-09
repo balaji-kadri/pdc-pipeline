@@ -205,3 +205,18 @@ jobs:
         with:
           name: pdc-dashboard-payload
           path: dashboard/payload.json
+      
+      - name: Prepare dashboard site
+        run: |
+          mkdir -p dashboard-site
+          cp dashboard/payload.json dashboard-site/payload.json
+          # Copy index.html, style.css, script.js from repo (already committed)
+          cp dashboard-site/* dashboard-site/
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: dashboard-site
+          publish_branch: gh-pages
+
