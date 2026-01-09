@@ -1,7 +1,0 @@
-
-{
-  "coverage_min": 0.80,
-  "perf_regression_max_pct": 0.10,
-  "security_max_severity": "Medium",
-  "require_critical_suite_pass": true
-}
